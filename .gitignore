@@ -38,6 +38,13 @@ test_whatsapps.py
 .env
 usage.txt
 
+# enviroment variables
+*/env
+*.env
+
+
+
+
 
 
 
