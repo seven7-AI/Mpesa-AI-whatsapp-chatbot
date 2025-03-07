@@ -1,28 +1,16 @@
-from flask import Flask
-import logging
+from src.server.app import app
 
-from src.platforms.whatsapp.views import webhook_blueprint
-# from whatsapp_configuration.config import Config
-# from ai_bot_langchain import AIBot
-
-
-def create_app():
-    #app set up function
-    app = Flask(__name__)
-    # Config.configure_logging()
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True) 
     
-    app.register_blueprint(webhook_blueprint)
     
-    #create a separate bot instance for each phone number,
-    #this allows different users to have separate conversations with the chatbot
-    #it also allows different users to use different google callendar APIs
-    app.bot_instance = AIBot()
     
-    return app
+# # src/server/app.py
+# from flask import Flask
+# from src.server.routes import init_routes  # Ensure this matches the filename
 
+# app = Flask(__name__)
+# init_routes(app)
 
-if __name__ == '__main__':
-    app = create_app()
-    
-    logging.info('Flask app started')
-    app.run(host='0.0.0.0', port=5000)   
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5000, debug=True) 

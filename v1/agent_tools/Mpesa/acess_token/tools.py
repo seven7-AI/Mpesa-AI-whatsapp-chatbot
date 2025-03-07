@@ -4,13 +4,14 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+import os
 
 load_dotenv()
 
 
 def get_access_token():
-    consumer_key = "eiDkD79ICeFRE1FDiHgCbDMiOvXgp3cj"
-    consumer_secret = "BfFwVt1uGLt7Mki3"
+    consumer_key = os.getenv("CONSUMER_KEY")
+    consumer_secret = os.getenv("CONSUMER_SECRET")
     access_token_url = "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
 
     headers = {'Content-Type': 'application/json'}

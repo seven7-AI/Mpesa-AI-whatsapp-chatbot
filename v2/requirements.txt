@@ -1,0 +1,14 @@
+langchain 
+langgraph 
+langchain-openai 
+langchain-anthropic 
+langchain-neo4j 
+langmem 
+requests 
+Flask 
+python-telegram-bot 
+tweepy
+python-dotenv
+langgraph-swarm
+langchain-neo4j
+langgraph-bigtool
