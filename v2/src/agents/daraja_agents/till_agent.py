@@ -2,9 +2,9 @@ from langchain.tools import BaseTool
 from datetime import datetime
 import base64
 from pydantic import BaseModel, Field
-from typing import Optional, Type
-from src.config.env import MPESA_PASSKEY, MPESA_CALLBACK_URL
-from src.config.constants import PROCESS_REQUEST_URL, TRANSACTION_TYPE_BUY_GOODS
+from typing import Optional, Type, ClassVar
+from config.env import MPESA_PASSKEY, MPESA_CALLBACK_URL
+from config.constants import PROCESS_REQUEST_URL, TRANSACTION_TYPE_BUY_GOODS
 import requests
 
 class TillPaymentInput(BaseModel):
@@ -19,8 +19,8 @@ class TillPaymentOutput(BaseModel):
     error_message: Optional[str] = Field(description="Error message if the request fails")
 
 class TillAgent(BaseTool):
-    name = "initiate_till_payment"
-    description = "Initiates an Mpesa Till payment (Buy Goods) using STK Push."
+    name: ClassVar[str] = "initiate_till_payment"
+    description: ClassVar[str] = "Initiates an Mpesa Till payment (Buy Goods) using STK Push."
     args_schema: Type[BaseModel] = TillPaymentInput
 
     def _run(self, amount: float, phone_number: str, short_code: str, account_reference: str, access_token: str) -> TillPaymentOutput:

@@ -1,17 +1,10 @@
-from langgraph_swarm import create_react_agent
 from langchain_openai import ChatOpenAI
-from src.tools.daraja_tools import till_agent
-from src.tools import browsing_tool, sheng_tool, twitter_tool
+from langchain_core.messages import SystemMessage
+from config.env import OPENAI_API_KEY
 
-llm = ChatOpenAI(model="gpt-4o", api_key="YOUR_OPENAI_API_KEY")
-tools = [till_agent, browsing_tool, sheng_tool, twitter_tool]
-
-chat_agent = create_react_agent(
-    llm=llm,
-    tools=tools,
-    prompt="You are a multilingual chatbot for Mpesa transactions.",
-    name="ChatAgent"
-)
-
-def run_chat(input_state):
-    return chat_agent.run(input_state)
+def run_chat(state):
+    llm = ChatOpenAI(model="gpt-4o", api_key=OPENAI_API_KEY)  # Replace with your key
+    prompt = "You are a chatbot for Mpesa transactions. Interpret the user's intent and respond appropriately."
+    messages = [SystemMessage(content=prompt)] + state.messages
+    response = llm.invoke(messages)
+    return {"messages": state.messages + [response]}
