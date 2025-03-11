@@ -74,7 +74,14 @@ def run_twitter_scraper(scrape_type, target=None, tweet_count=100, latest=False,
 
 # Example usage for dynamic advanced search:
 # run_twitter_scraper('profile', 'elonmusk', tweet_count=100, latest=True)
-# run_twitter_scraper('advanced', target="@elonmusk", min_replies=1000, until_date="2023-08-31", since_date="2020-01-01")
+
+
+# run_twitter_scraper(
+    # 'advanced', 
+    # target="@elonmusk", 
+    # min_replies=1000, 
+    # until_date="2023-08-31", 
+    # since_date="2020-01-01")
 
 
 # Scrape tweets containing the hashtag #python
