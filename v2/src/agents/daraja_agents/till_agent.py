@@ -3,8 +3,8 @@ from datetime import datetime
 import base64
 from pydantic import BaseModel, Field
 from typing import Optional, Type, ClassVar
-from config.env import MPESA_PASSKEY, MPESA_CALLBACK_URL
-from config.constants import PROCESS_REQUEST_URL, TRANSACTION_TYPE_BUY_GOODS
+from src.config.env import MPESA_PASSKEY, MPESA_CALLBACK_URL 
+from src.config.constants import PROCESS_REQUEST_URL, TRANSACTION_TYPE_BUY_GOODS
 import requests
 
 class TillPaymentInput(BaseModel):
