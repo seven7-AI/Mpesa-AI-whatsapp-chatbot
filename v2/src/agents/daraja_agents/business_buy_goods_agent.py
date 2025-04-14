@@ -35,7 +35,7 @@ class BusinessBuyGoodsAgent(BaseTool):
             "SenderIdentifierType": "4",  # Shortcode type
             "ReceiverIdentifierType": "4",  # Till/Merchant shortcode type
             "Amount": str(amount),
-            "PartyA": sender_short_code,
+            "PartyA": requester_phone,
             "PartyB": receiver_short_code,
             "AccountReference": account_reference,
             "Remarks": remarks,

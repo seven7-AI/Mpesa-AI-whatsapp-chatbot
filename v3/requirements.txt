@@ -1,0 +1,8 @@
+graphiti-core 
+langchain-openai 
+langgraph 
+ipywidgets
+fastapi
+pydantic
+python-dotenv
+mpesa-integration
