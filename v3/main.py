@@ -1,305 +1,313 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 import os
 import logging
-from logging.handlers import RotatingFileHandler
-import json
-import time
 from dotenv import load_dotenv
+from supabase import create_client, Client
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_openai.chat_models import ChatOpenAI
+from langchain.chains import ConversationalRetrievalChain
+from langchain_community.vectorstores import SupabaseVectorStore
 from mpesa_integration.mpesa import MpesaClient, MpesaConfig
-from langgraph.graph import Graph
-from langchain_openai import ChatOpenAI
-from langchain_neo4j import Neo4jGraph
-import re
-import traceback
+import json
+from datetime import datetime
+import redis
+from telegram import Update, Bot
+from telegram.ext import CommandHandler, MessageHandler, CallbackContext, filters
+from telegram.ext import ApplicationBuilder
+
+app = FastAPI(title="M-Pesa Personal Assistant API")
 
 # Configure logging
-def setup_logging():
-    """Configure and set up logging for the application."""
-    os.makedirs("logs", exist_ok=True)
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    log_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_format)
-    logger.addHandler(console_handler)
-    file_handler = RotatingFileHandler(
-        "logs/mpesa_app.log", maxBytes=10*1024*1024, backupCount=5
-    )
-    file_handler.setFormatter(log_format)
-    logger.addHandler(file_handler)
-    error_handler = RotatingFileHandler(
-        "logs/mpesa_errors.log", maxBytes=10*1024*1024, backupCount=5
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(log_format)
-    logger.addHandler(error_handler)
-    return logger
-
-logger = setup_logging()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
-logger.info("Loading environment variables")
 load_dotenv()
 
-# Log environment variables for debugging
-logger.info(f"NEO4J_URI: {os.getenv('NEO4J_URI')}")
-logger.info(f"NEO4J_USER: {os.getenv('NEO4J_USER')}")
-logger.info(f"NEO4J_PASSWORD: {os.getenv('NEO4J_PASSWORD')}")
+# Initialize Supabase client
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(supabase_url, supabase_key)
 
-try:
-    # Initialize Neo4jGraph for memory management
-    logger.info("Initializing Neo4jGraph")
-    neo4j_db = Neo4jGraph(
-        url=os.getenv("NEO4J_URI"),
-        username=os.getenv("NEO4J_USER"),
-        password=os.getenv("NEO4J_PASSWORD")
-    )
-    neo4j_db.query("CREATE CONSTRAINT user_phone_number IF NOT EXISTS FOR (u:User) REQUIRE u.phone_number IS UNIQUE")
-    logger.info("Neo4jGraph initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize Neo4jGraph: {str(e)}", exc_info=True)
-    raise
+# Initialize Redis client
+redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
 
-try:
-    # Initialize M-Pesa client
-    logger.info("Initializing M-Pesa client")
-    config = MpesaConfig(
-        consumer_key=os.getenv("MPESA_CONSUMER_KEY"),
-        consumer_secret=os.getenv("MPESA_CONSUMER_SECRET"),
-        shortcode=os.getenv("MPESA_SHORTCODE"),
-        passkey=os.getenv("MPESA_PASSKEY"),
-        callback_url=os.getenv("MPESA_CALLBACK_URL"),
-        environment=os.getenv("MPESA_ENVIRONMENT", "sandbox")
-    )
-    mpesa_client = MpesaClient(config)
-    logger.info("M-Pesa client initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize M-Pesa client: {str(e)}", exc_info=True)
-    raise
+# Initialize OpenAI Embeddings and LangChain
+embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
+vectorstore = SupabaseVectorStore(supabase, embeddings, table_name="user_interactions")
+llm = ChatOpenAI(openai_api_key=os.getenv("OPENAI_API_KEY"), temperature=0)
+qa = ConversationalRetrievalChain.from_llm(llm, vectorstore.as_retriever())
 
-# Define tools for the agent
-def get_state(phone_number: str) -> str:
-    """Retrieve the current state of a user from Neo4j."""
+# M-Pesa configuration
+config = MpesaConfig(
+    consumer_key=os.getenv("MPESA_CONSUMER_KEY"),
+    consumer_secret=os.getenv("MPESA_CONSUMER_SECRET"),
+    shortcode=os.getenv("MPESA_SHORTCODE"),
+    business_shortcode=os.getenv("MPESA_BUSINESS_SHORTCODE"),
+    passkey=os.getenv("MPESA_PASSKEY"),
+    callback_url=os.getenv("MPESA_CALLBACK_URL"),
+    environment=os.getenv("MPESA_ENVIRONMENT")
+)
+client = MpesaClient(config)
+
+# Base prompt for context
+base_prompt = """
+You are a personal assistant that helps users with various tasks, including initiating M-Pesa payments.
+You can handle both Till and Paybill payments. When a user asks to make a payment, ask for the necessary details
+such as phone number, amount, account reference, and transaction description. Use the provided information to
+initiate the payment through the M-Pesa API.
+"""
+
+# Telegram bot token
+TELEGRAM_TOKEN = "7951709962:AAGzPzuVPtwL95fRFQIZhrfUvoszAO2Ep4k"
+
+# Initialize Telegram bot
+bot = Bot(token=TELEGRAM_TOKEN)
+
+# Pydantic model for payment request validation
+class PaymentRequest(BaseModel):
+    phone_number: str
+    amount: int
+    account_reference: str = "Payment"
+    transaction_desc: str = "M-Pesa Payment"
+
+# Add this function to get the user ID from request
+async def get_current_user_id(request: Request) -> str:
+    """
+    Extract the user ID from the request.
+    This is a simple implementation - in production, you would implement proper authentication.
+    """
+    # For now, just extract from headers or return a default value
+    # In a real app, you'd use proper auth tokens
+    headers = request.headers
+    user_id = headers.get("X-User-ID", "default_user")
+    return user_id
+
+@app.post("/initiate_payment")
+async def initiate_payment_endpoint(payment: PaymentRequest, user_id: str = Depends(get_current_user_id)):
+    logger.info(f"Received payment request: phone={payment.phone_number}, amount={payment.amount}")
     try:
-        logger.debug(f"Getting state for phone number: {phone_number}")
-        result = neo4j_db.query(
-            "MATCH (u:User {phone_number: $phone_number}) RETURN u.state AS state",
-            params={"phone_number": phone_number}
+        response = client.initiate_payment(
+            phone_number=payment.phone_number,
+            amount=payment.amount,
+            account_reference=payment.account_reference,
+            transaction_desc=payment.transaction_desc
         )
-        state = result[0]["state"] if result and "state" in result[0] else "idle"
-        logger.debug(f"State for {phone_number}: {state}")
-        return state
-    except Exception as e:
-        logger.error(f"Error getting state for {phone_number}: {str(e)}", exc_info=True)
-        return "idle"
+        logger.info(f"M-Pesa API Response: {response}")
+        if response.get("ResponseCode") != "0":
+            logger.error(f"M-Pesa API Error: {response.get('ResponseDescription')}")
+            raise HTTPException(status_code=400, detail=response.get('CustomerMessage', 'M-Pesa request failed'))
 
-def set_state(phone_number: str, new_state: str):
-    """Set the state of a user in Neo4j."""
-    try:
-        logger.debug(f"Setting state for {phone_number} to: {new_state}")
-        neo4j_db.query(
-            "MERGE (u:User {phone_number: $phone_number}) SET u.state = $new_state",
-            params={"phone_number": phone_number, "new_state": new_state}
-        )
-        logger.debug(f"State for {phone_number} updated successfully")
-    except Exception as e:
-        logger.error(f"Error setting state for {phone_number}: {str(e)}", exc_info=True)
-        raise
+        # Store the payment interaction
+        interaction_details = {
+            "type": "payment",
+            "amount": payment.amount,
+            "account_reference": payment.account_reference,
+            "transaction_desc": payment.transaction_desc,
+            "response": response
+        }
+        await store_interaction(user_id, interaction_details)
 
-def extract_amount(message: str) -> int | None:
-    """Extract a numeric amount from the user's message."""
-    try:
-        logger.debug(f"Extracting amount from message: {message}")
-        match = re.search(r'\b\d+\b', message)
-        if match:
-            amount = int(match.group())
-            logger.debug(f"Extracted amount: {amount}")
-            return amount
-        logger.debug("No amount found in message")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting amount from message: {str(e)}", exc_info=True)
-        return None
-
-def initiate_payment(phone_number: str, amount: int) -> dict:
-    """Initiate a till payment using M-Pesa."""
-    try:
-        logger.info(f"Initiating payment for {phone_number}, amount: {amount}")
-        start_time = time.time()
-        response = mpesa_client.initiate_payment(
-            phone_number=phone_number,
-            amount=amount,
-            account_reference="TillPayment",
-            transaction_desc="Payment via Till Number"
-        )
-        elapsed_time = time.time() - start_time
-        logger.info(f"Payment initiated in {elapsed_time:.2f}s: {json.dumps(response)}")
         return response
     except Exception as e:
-        logger.error(f"Failed to initiate payment: {str(e)}", exc_info=True)
-        return {"ResponseCode": "1", "ResponseDescription": f"Error: {str(e)}"}
-
-# Define custom chains for different actions
-def ask_for_amount_chain(input_data: dict) -> dict:
-    """Chain to request the amount from the user."""
-    try:
-        phone_number = input_data["phone_number"]
-        logger.info(f"Asking for amount from {phone_number}")
-        set_state(phone_number, "waiting_for_amount")
-        return {"response": "Please provide the amount."}
-    except Exception as e:
-        logger.error(f"Error in ask_for_amount_chain: {str(e)}", exc_info=True)
-        return {"response": "Sorry, there was an error processing your request. Please try again."}
-
-def initiate_payment_chain(input_data: dict) -> dict:
-    """Chain to initiate payment if amount is provided."""
-    try:
-        phone_number = input_data["phone_number"]
-        amount = input_data.get("amount")
-        logger.info(f"Initiating payment chain for {phone_number}, amount: {amount}")
-        if amount is None:
-            logger.warning(f"Amount not provided for {phone_number}")
-            return {"response": "Amount not provided. Please provide the amount."}
-        response = initiate_payment(phone_number, amount)
-        if response.get("ResponseCode") == "0":
-            checkout_id = response["CheckoutRequestID"]
-            set_state(phone_number, "payment_pending")
-            neo4j_db.query(
-                "MERGE (u:User {phone_number: $phone_number}) SET u.checkout_request_id = $checkout_id",
-                params={"phone_number": phone_number, "checkout_id": checkout_id}
-            )
-            logger.info(f"Payment successfully initiated for {phone_number}, checkout ID: {checkout_id}")
-            return {"response": "Payment initiated. Please confirm on your M-Pesa app."}
-        else:
-            error_msg = response.get("ResponseDescription", "Unknown error")
-            logger.error(f"Failed to initiate payment: {error_msg}")
-            return {"response": f"Failed to initiate payment: {error_msg}"}
-    except Exception as e:
-        logger.error(f"Error in initiate_payment_chain: {str(e)}", exc_info=True)
-        return {"response": "Sorry, there was an error processing your payment. Please try again later."}
-
-def provide_status_chain(input_data: dict) -> dict:
-    """Chain to provide payment status based on current state."""
-    try:
-        phone_number = input_data.get("phone_number", "unknown")
-        state = input_data.get("state")
-        logger.info(f"Providing status for {phone_number}, state: {state}")
-        if state == "payment_pending":
-            return {"response": "Your payment is still pending."}
-        elif state == "payment_success":
-            return {"response": "Your payment was successful."}
-        elif state == "payment_failed":
-            return {"response": "Your payment failed."}
-        else:
-            return {"response": "I'm not sure about your payment status."}
-    except Exception as e:
-        logger.error(f"Error in provide_status_chain: {str(e)}", exc_info=True)
-        return {"response": "Sorry, there was an error checking your payment status."}
-
-# Define the LangGraph
-logger.info("Setting up LangGraph")
-try:
-    graph = Graph()
-    input_node = graph.add_input_node()
-    get_state_node = graph.add_tool_node(get_state)
-    extract_amount_node = graph.add_tool_node(extract_amount)
-    router_node = graph.add_llm_router_node(
-        llm=ChatOpenAI(),
-        prompt="""
-        Current state: {state}
-        User said: {message}
-        Extracted amount: {amount}
-        What should be the next action? Choose from: ask_for_amount, initiate_payment, provide_status
-        """,
-        output_variable="choice"
-    )
-    ask_for_amount_node = graph.add_custom_node(ask_for_amount_chain)
-    initiate_payment_node = graph.add_custom_node(initiate_payment_chain)
-    provide_status_node = graph.add_custom_node(provide_status_chain)
-    graph.add_edge(input_node, get_state_node)
-    graph.add_edge(get_state_node, extract_amount_node)
-    graph.add_edge(extract_amount_node, router_node)
-    graph.add_edge(router_node, ask_for_amount_node, condition=lambda x: x["choice"] == "ask_for_amount")
-    graph.add_edge(router_node, initiate_payment_node, condition=lambda x: x["choice"] == "initiate_payment")
-    graph.add_edge(router_node, provide_status_node, condition=lambda x: x["choice"] == "provide_status")
-    logger.info("LangGraph setup complete")
-except Exception as e:
-    logger.critical(f"Failed to set up LangGraph: {str(e)}", exc_info=True)
-    raise
-
-# FastAPI application
-app = FastAPI()
-
-class MessageRequest(BaseModel):
-    phone_number: str
-    message: str
-
-@app.post("/message")
-async def handle_message(request: MessageRequest):
-    """Handle user messages by running the LangGraph agent."""
-    request_id = f"req_{int(time.time()*1000)}"
-    logger.info(f"[{request_id}] Received message request from {request.phone_number}: {request.message}")
-    try:
-        input_data = {
-            "phone_number": request.phone_number,
-            "message": request.message
-        }
-        start_time = time.time()
-        output = graph.invoke(input_data)
-        elapsed_time = time.time() - start_time
-        logger.info(f"[{request_id}] Graph processing completed in {elapsed_time:.2f}s")
-        logger.debug(f"[{request_id}] Graph output: {json.dumps(output)}")
-        return {"response": output["response"]}
-    except Exception as e:
-        error_trace = traceback.format_exc()
-        logger.error(f"[{request_id}] Error processing message: {str(e)}\n{error_trace}")
-        return {"response": "Sorry, I encountered an error while processing your request. Please try again later."}
+        logger.exception(f"Payment initiation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.post("/mpesa/callback")
-async def handle_callback(request: Request):
-    """Handle M-Pesa callbacks to update payment status."""
-    request_id = f"callback_{int(time.time()*1000)}"
-    logger.info(f"[{request_id}] Received M-Pesa callback")
+async def mpesa_callback(request: Request):
     try:
         callback_data = await request.json()
-        logger.debug(f"[{request_id}] Callback data: {json.dumps(callback_data)}")
-        checkout_id = callback_data["Body"]["stkCallback"]["CheckoutRequestID"]
-        result_code = callback_data["Body"]["stkCallback"]["ResultCode"]
-        logger.info(f"[{request_id}] Processing callback for checkout ID: {checkout_id}, result code: {result_code}")
-        result = neo4j_db.query(
-            "MATCH (u:User) WHERE u.checkout_request_id = $checkout_id RETURN u.phone_number AS phone_number",
-            params={"checkout_id": checkout_id}
-        )
-        if result:
-            phone_number = result[0]["phone_number"]
-            logger.info(f"[{request_id}] Found user {phone_number} for checkout ID {checkout_id}")
-            new_state = "payment_success" if result_code == 0 else "payment_failed"
-            logger.info(f"[{request_id}] Payment {'successful' if result_code == 0 else 'failed'} for {phone_number}")
-            set_state(phone_number, new_state)
-            neo4j_db.query(
-                "MATCH (u:User {phone_number: $phone_number}) REMOVE u.checkout_request_id",
-                params={"phone_number": phone_number}
-            )
-            logger.info(f"[{request_id}] Updated state to {new_state} for {phone_number}")
+        logger.info(f"Received M-Pesa callback: {callback_data}")
+        if not isinstance(callback_data, dict) or "Body" not in callback_data:
+            logger.error("Invalid callback format received.")
+            raise HTTPException(status_code=400, detail="Invalid callback format")
+        stk_callback = callback_data.get("Body", {}).get("stkCallback", {})
+        if not stk_callback:
+            logger.error("Callback data missing 'stkCallback' field.")
+            raise HTTPException(status_code=400, detail="Callback data missing 'stkCallback' field")
+
+        merchant_request_id = stk_callback.get("MerchantRequestID")
+        checkout_request_id = stk_callback.get("CheckoutRequestID")
+        result_code = stk_callback.get("ResultCode")
+        result_desc = stk_callback.get("ResultDesc")
+        logger.info(f"Callback details: MerchantReqID={merchant_request_id}, CheckoutReqID={checkout_request_id}, ResultCode={result_code}, Desc={result_desc}")
+
+        # Update the payment interaction with the callback details
+        interaction_details = {
+            "type": "payment_callback",
+            "merchant_request_id": merchant_request_id,
+            "checkout_request_id": checkout_request_id,
+            "result_code": result_code,
+            "result_desc": result_desc,
+            "callback_data": stk_callback
+        }
+        # Assuming you have a way to get the user_id from the callback data
+        user_id = get_user_id_from_callback(callback_data)
+        await store_interaction(user_id, interaction_details)
+
+        if result_code == 0:
+            logger.info(f"Payment successful for CheckoutRequestID: {checkout_request_id}")
+            # Add success logic here
         else:
-            logger.warning(f"[{request_id}] No user found for checkout ID: {checkout_id}")
+            logger.error(f"Payment failed/cancelled for CheckoutRequestID: {checkout_request_id}. Reason: {result_desc} (Code: {result_code})")
+            # Add failure logic here
         return {"ResultCode": 0, "ResultDesc": "Accepted"}
     except Exception as e:
-        error_trace = traceback.format_exc()
-        logger.error(f"[{request_id}] Error processing callback: {str(e)}\n{error_trace}")
-        return {"ResultCode": 0, "ResultDesc": "Accepted despite error"}
+        logger.exception(f"Callback processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error processing callback")
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    logger.debug("Health check requested")
-    return {"status": "healthy", "timestamp": time.time()}
+@app.post("/chat")
+async def chat_endpoint(request: Request, user_id: str = Depends(get_current_user_id)):
+    data = await request.json()
+    message = data.get("message")
+    chat_history = data.get("chat_history", [])
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    # Prepend base prompt to the user message
+    full_message = f"{base_prompt}\nUser: {message}"
+
+    # Store the chat interaction
+    interaction_details = {
+        "type": "chat",
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    await store_interaction(user_id, interaction_details)
+
+    # Generate response using LangChain
+    result = qa({"question": full_message, "chat_history": chat_history})
+    response = result["answer"]
+    chat_history.append((message, response))
+
+    return {"response": response, "chat_history": chat_history}
+
+async def store_interaction(user_id: str, interaction_details: dict):
+    # Get the embedding for the interaction details
+    embedding = embeddings.embed_documents([json.dumps(interaction_details)])[0]
+
+    # Insert the interaction into the user_interactions table
+    data = {
+        "user_id": user_id,
+        "interaction_type": interaction_details["type"],
+        "interaction_details": interaction_details,
+        "embedding": embedding
+    }
+    supabase.table("user_interactions").insert(data).execute()
+
+    # Store the interaction in Redis for caching
+    redis_key = f"interaction:{user_id}"
+    redis_client.rpush(redis_key, json.dumps(interaction_details))
+
+def get_user_id_from_callback(callback_data: dict) -> str:
+    # Implement logic to extract user_id from callback_data
+    # This is a placeholder implementation
+    return callback_data.get("user_id", "")
+
+# Telegram bot handlers
+async def start(update: Update, context: CallbackContext) -> None:
+    await update.message.reply_text('Hi! I am your personal assistant. How can I help you today?')
+
+async def handle_message(update: Update, context: CallbackContext) -> None:
+    user = update.message.from_user
+    message = update.message.text
+    chat_history = []
+
+    # Prepend base prompt to the user message
+    full_message = f"{base_prompt}\nUser: {message}"
+
+    # Store the chat interaction
+    interaction_details = {
+        "type": "chat",
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat(),
+        "username": user.username,
+        "phone_number": user.phone_number if user.phone_number else ""
+    }
+    await store_interaction(str(user.id), interaction_details)
+
+    # Generate response using LangChain
+    result = qa({"question": full_message, "chat_history": chat_history})
+    response = result["answer"]
+    chat_history.append((message, response))
+
+    await update.message.reply_text(response)
+
+async def handle_payment(update: Update, context: CallbackContext) -> None:
+    user = update.message.from_user
+    message = update.message.text
+
+    # Extract payment details from the message
+    try:
+        amount = int(message.split()[1])
+        account_reference = message.split()[2]
+        transaction_desc = message.split()[3]
+    except (IndexError, ValueError):
+        await update.message.reply_text('Invalid payment details. Please use the format: /pay <amount> <account_reference> <transaction_desc>')
+        return
+
+    # Initiate payment
+    payment = PaymentRequest(
+        phone_number=user.phone_number if user.phone_number else "",
+        amount=amount,
+        account_reference=account_reference,
+        transaction_desc=transaction_desc
+    )
+    response = await initiate_payment_endpoint(payment, str(user.id))
+
+    await update.message.reply_text(f"Payment initiated: {response}")
+
+def main() -> None:
+    # Create the Application and pass it your bot's token.
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    # on different commands - answer in Telegram
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("pay", handle_payment))
+
+    # on non command i.e message - echo the message on Telegram
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Run the bot until the user presses Ctrl-C
+    application.run_polling()
 
 if __name__ == "__main__":
-    logger.info("Starting application")
-    try:
-        import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=8000)
-    except Exception as e:
-        logger.critical(f"Failed to start application: {str(e)}", exc_info=True)
+    import uvicorn
+    import asyncio
+    import threading
+
+    # Run the Telegram bot in a separate thread
+    def run_telegram_bot():
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Instead of using run_polling() which is meant for synchronous use,
+        # we'll create and run the application differently
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        
+        # Add handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("pay", handle_payment))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # Start the bot
+        loop.run_until_complete(application.initialize())
+        loop.run_until_complete(application.start())
+        loop.run_forever()
+    
+    # Start the Telegram bot in a background thread
+    bot_thread = threading.Thread(target=run_telegram_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Run the FastAPI server in the main thread
+    port = int(os.getenv("PORT", 8000))
+    logger.info(f"Starting server on port {port}...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
