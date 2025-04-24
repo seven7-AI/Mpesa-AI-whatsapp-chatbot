@@ -1,0 +1,13 @@
+mpesa-integration
+langchain
+langchain-openai
+openai
+python-dotenv
+fastapi
+uvicorn
+google-api-python-client
+google-search-results
+python-telegram-bot
+twilio
+pydantic
+requests

@@ -1,0 +1,31 @@
+1. Only include the paybill and till payment transactions
+
+
+[
+For Till Payments:
+
+MPESA_CONSUMER_KEY=your_consumer_key
+MPESA_CONSUMER_SECRET=your_consumer_secret
+MPESA_PASSKEY=your_passkey
+MPESA_SHORTCODE=your_till_number # Use Till Number here
+MPESA_CALLBACK_URL=https://your-domain.com/api/mpesa/callback
+MPESA_ENVIRONMENT=sandbox  # or "production"
+# MPESA_BUSINESS_SHORTCODE is not needed for Till
+For Paybill Payments:
+
+MPESA_CONSUMER_KEY=your_consumer_key
+MPESA_CONSUMER_SECRET=your_consumer_secret
+MPESA_PASSKEY=your_passkey
+MPESA_SHORTCODE=your_paybill_number # Use Paybill Number here
+MPESA_BUSINESS_SHORTCODE=your_paybill_number # Use the same Paybill Number here
+MPESA_CALLBACK_URL=https://your-domain.com/api/mpesa/callback
+MPESA_ENVIRONMENT=sandbox  # or "production"
+]
+
+
+see more on the documentation
+
+2. Use the google search API
+3. Just focus on this tools first
+4. WhatsApp and telegram
+5. it should do a normal conversation and use its functionalities as tools.
