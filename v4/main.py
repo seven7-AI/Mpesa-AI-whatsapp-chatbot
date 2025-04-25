@@ -1,9 +1,8 @@
 """
 FastAPI Web Integration for Chat Agent
 
-This module implements a FastAPI web server that integrates all components:
-- Chat agent with M-Pesa and search tools
-- WhatsApp integration
+This module implements a FastAPI web server that integrates:
+- Chat agent with M-Pesa Till payment tool
 - Telegram integration
 """
 
@@ -13,14 +12,12 @@ import asyncio
 import threading
 from typing import Dict, Any
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Import our components
 from chat_agent import ChatAgent
-from whatsapp_integration import WhatsAppIntegration
 from telegram_integration import TelegramIntegration
 
 # Configure logging
@@ -35,7 +32,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Create FastAPI app
-app = FastAPI(title="M-Pesa Chat Agent API")
+app = FastAPI(title="M-Pesa Till Payment Chat Agent API")
 
 # Add CORS middleware
 app.add_middleware(
@@ -48,14 +45,6 @@ app.add_middleware(
 
 # Initialize chat agent
 chat_agent = ChatAgent()
-
-# Initialize WhatsApp integration
-try:
-    whatsapp_integration = WhatsAppIntegration(chat_agent)
-    logger.info("WhatsApp integration initialized successfully.")
-except Exception as e:
-    logger.warning(f"Failed to initialize WhatsApp integration: {e}")
-    whatsapp_integration = None
 
 # Initialize Telegram integration in a separate thread
 telegram_integration = None
@@ -99,7 +88,7 @@ class ChatResponse(BaseModel):
 @app.get("/")
 async def root():
     """Root endpoint."""
-    return {"message": "M-Pesa Chat Agent API is running"}
+    return {"message": "M-Pesa Till Payment Chat Agent API is running"}
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
@@ -126,30 +115,6 @@ async def chat_endpoint(request: ChatRequest):
         logger.exception(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
 
-@app.post("/whatsapp/webhook")
-async def whatsapp_webhook(request: Request):
-    """
-    WhatsApp webhook endpoint.
-    
-    Args:
-        request: The incoming request
-        
-    Returns:
-        Dict[str, Any]: The response
-    """
-    if whatsapp_integration is None:
-        error_msg = "WhatsApp integration is not available"
-        logger.error(error_msg)
-        raise HTTPException(status_code=503, detail=error_msg)
-    
-    try:
-        return await whatsapp_integration.process_whatsapp_message(request)
-        
-    except Exception as e:
-        error_msg = f"Error processing WhatsApp webhook: {str(e)}"
-        logger.exception(error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
-
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -157,7 +122,7 @@ async def health_check():
         "status": "healthy",
         "components": {
             "chat_agent": "available",
-            "whatsapp": "available" if whatsapp_integration is not None else "unavailable",
+            "mpesa_till_tool": "available",
             "telegram": "running" if telegram_thread is not None and telegram_thread.is_alive() else "unavailable"
         }
     }

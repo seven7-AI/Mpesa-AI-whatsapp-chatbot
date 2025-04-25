@@ -1,13 +1,13 @@
 """
 Google Search Tool for Chat Agent
 
-This module implements the Google Search tool for the chat agent,
-allowing it to search the web for information.
+This module implements a Google Search tool that can be used by the chat agent
+to search for information on the web.
 """
 
 import os
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 class GoogleSearchInput(BaseModel):
-    """Input for Google Search."""
+    """Input schema for Google Search."""
     query: str = Field(..., description="The search query to look up")
     num_results: int = Field(default=5, description="Number of search results to return")
 
@@ -34,131 +34,75 @@ class GoogleSearchTool(BaseTool):
     description: str = "Search the web for information using Google Search API"
     args_schema: type[GoogleSearchInput] = GoogleSearchInput
     
+    # Add field for search client to satisfy Pydantic
+    search_client: Optional[Any] = None
+    
     def __init__(self):
         """Initialize the Google Search tool."""
         super().__init__()
         self._initialize_search_client()
         
     def _initialize_search_client(self) -> None:
-        """Initialize the Google Search client."""
+        """Initialize a mock search client since langchain_community is not available."""
         try:
-            # Check for required API key
-            api_key = os.getenv("GOOGLE_API_KEY")
+            # First check if we have the API key
+            api_key = os.getenv("SERP_API_KEY")
             if not api_key:
-                error_msg = "Missing GOOGLE_API_KEY environment variable"
-                logger.error(error_msg)
-                raise EnvironmentError(error_msg)
-            
-            # Import the necessary libraries
+                logger.warning("Missing SERP_API_KEY environment variable")
+                self.search_client = None
+                return
+                
+            # Try to import the module - if it's not there, we'll use a mock
             try:
-                from googleapiclient.discovery import build
-                self.service = build("customsearch", "v1", developerKey=api_key)
-                
-                # Check for Custom Search Engine ID
-                self.cse_id = os.getenv("GOOGLE_CSE_ID")
-                if not self.cse_id:
-                    error_msg = "Missing GOOGLE_CSE_ID environment variable"
-                    logger.error(error_msg)
-                    raise EnvironmentError(error_msg)
-                
-                logger.info("Google Search API client initialized successfully.")
+                from langchain_community.utilities import SerpAPIWrapper
+                self.search_client = SerpAPIWrapper(serpapi_api_key=api_key)
+                logger.info("SerpAPI client initialized successfully.")
             except ImportError:
-                # Fall back to SerpAPI if Google API client is not available
-                try:
-                    from serpapi import GoogleSearch
-                    serpapi_key = os.getenv("SERPAPI_API_KEY")
-                    if not serpapi_key:
-                        error_msg = "Missing SERPAPI_API_KEY environment variable"
-                        logger.error(error_msg)
-                        raise EnvironmentError(error_msg)
-                    
-                    self.use_serpapi = True
-                    self.serpapi_key = serpapi_key
-                    logger.info("SerpAPI client initialized as fallback.")
-                except ImportError:
-                    error_msg = "Neither Google API client nor SerpAPI is available"
-                    logger.error(error_msg)
-                    raise ImportError(error_msg)
+                logger.warning("langchain_community module not available, using mock search implementation")
+                self.search_client = None
+                
         except Exception as e:
-            logger.error(f"Failed to initialize search client: {e}")
-            raise
+            error_msg = f"Failed to initialize search client: {e}"
+            logger.error(error_msg)
+            self.search_client = None
     
-    def _run(self, query: str, num_results: int = 5) -> Dict[str, Any]:
-        """Run the Google Search tool."""
+    def _run(self, query: str, num_results: int = 5) -> str:
+        """
+        Run the Google Search tool.
+        
+        Args:
+            query: The search query
+            num_results: Number of results to return
+            
+        Returns:
+            str: Formatted search results
+        """
         try:
             logger.info(f"Searching for: {query}")
             
-            if hasattr(self, 'use_serpapi') and self.use_serpapi:
-                return self._search_with_serpapi(query, num_results)
-            else:
-                return self._search_with_google_api(query, num_results)
+            # Use mock implementation if the real client is not available
+            if self.search_client is None:
+                return (
+                    "Search functionality is currently unavailable. "
+                    "To enable web search, please install the 'langchain_community' package with: "
+                    "pip install langchain_community"
+                )
+                
+            results = self.search_client.run(query)
+            logger.info(f"Search completed successfully, found results")
+            return results
             
         except Exception as e:
-            error_msg = f"Search failed: {str(e)}"
-            logger.exception(error_msg)
-            return {"status": "error", "message": error_msg}
-    
-    def _search_with_google_api(self, query: str, num_results: int) -> Dict[str, Any]:
-        """Search using Google Custom Search API."""
-        try:
-            result = self.service.cse().list(q=query, cx=self.cse_id, num=num_results).execute()
-            
-            search_results = []
-            if "items" in result:
-                for item in result["items"]:
-                    search_results.append({
-                        "title": item.get("title", ""),
-                        "link": item.get("link", ""),
-                        "snippet": item.get("snippet", "")
-                    })
-            
-            return {
-                "status": "success",
-                "query": query,
-                "results": search_results
-            }
-        except Exception as e:
-            logger.exception(f"Google API search failed: {str(e)}")
-            raise
-    
-    def _search_with_serpapi(self, query: str, num_results: int) -> Dict[str, Any]:
-        """Search using SerpAPI as a fallback."""
-        try:
-            from serpapi import GoogleSearch
-            
-            search_params = {
-                "q": query,
-                "api_key": self.serpapi_key,
-                "num": num_results
-            }
-            
-            search = GoogleSearch(search_params)
-            result = search.get_dict()
-            
-            search_results = []
-            if "organic_results" in result:
-                for item in result["organic_results"][:num_results]:
-                    search_results.append({
-                        "title": item.get("title", ""),
-                        "link": item.get("link", ""),
-                        "snippet": item.get("snippet", "")
-                    })
-            
-            return {
-                "status": "success",
-                "query": query,
-                "results": search_results
-            }
-        except Exception as e:
-            logger.exception(f"SerpAPI search failed: {str(e)}")
-            raise
+            error_msg = f"Error during search: {e}"
+            logger.error(error_msg)
+            return f"Search error: {error_msg}"
 
-# Factory function to get the search tool
-def get_search_tool() -> BaseTool:
+# Function to get the search tool instance
+def get_search_tool() -> GoogleSearchTool:
     """
-    Get the Google Search tool.
+    Get an instance of the Google Search tool.
     
     Returns:
-        BaseTool: The Google Search tool
+        GoogleSearchTool: An instance of the Google Search tool
     """
     return GoogleSearchTool()

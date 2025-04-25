@@ -1,8 +1,8 @@
 """
-Chat Agent with M-Pesa and Search Tools
+Chat Agent with M-Pesa Till Payment Tool
 
-This module implements the main chat agent that uses the M-Pesa integration
-and Google Search tools to interact with users.
+This module implements the main chat agent that uses the M-Pesa Till payment tool
+to process payments via chat.
 """
 
 import os
@@ -16,9 +16,8 @@ from langchain.memory import ConversationBufferMemory
 from langchain.tools import BaseTool
 from langchain.schema import SystemMessage
 
-# Import our custom tools
-from mpesa_tool import get_mpesa_tool
-from search_tool import get_search_tool
+# Import only the till payment tool
+from mpesa_tool import get_mpesa_tool, MpesaTillTool
 
 # Configure logging
 logging.basicConfig(
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 class ChatAgent:
-    """Chat agent that uses M-Pesa and Search tools."""
+    """Chat agent that uses M-Pesa Till payment tool."""
     
     def __init__(self, model_name: str = "gpt-3.5-turbo", temperature: float = 0.7):
         """
@@ -47,7 +46,7 @@ class ChatAgent:
         self._initialize_agent()
     
     def _initialize_agent(self) -> None:
-        """Initialize the LangChain agent with tools."""
+        """Initialize the LangChain agent with the Till payment tool."""
         try:
             # Check for OpenAI API key
             openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -63,24 +62,22 @@ class ChatAgent:
                 api_key=openai_api_key
             )
             
-            # Initialize tools
-            self.tools = self._get_tools()
+            # Initialize tools - create directly instead of using factory method
+            logger.info("Creating M-Pesa Till tool directly...")
+            till_tool = MpesaTillTool()
+            self.tools = [till_tool]
+            logger.info(f"Created tools: {[t.name for t in self.tools]}")
             
             # Create system message
             system_message = """
-            You are a helpful assistant that can process payments via M-Pesa and search the web for information.
-            
-            For M-Pesa payments, you can use either Till or Paybill payment methods.
-            - Till payments are for direct merchant payments
-            - Paybill payments require an account reference for reconciliation
+            You are Seven, a helpful assistant that can process M-Pesa Till payments.
+
+            You can use the mpesa_till_payment tool to initiate payments.
             
             When a user wants to make a payment:
             1. Ask for their phone number (format: 2547XXXXXXXX)
             2. Ask for the amount they want to pay
-            3. For Paybill payments, ask for an account reference (e.g., invoice number)
-            4. Confirm the details before initiating the payment
-            
-            You can also search the web for information when users ask questions.
+            3. Use the mpesa_till_payment tool with these parameters
             
             Always be polite, helpful, and concise in your responses.
             """
@@ -95,11 +92,12 @@ class ChatAgent:
             
             # Create memory
             self.memory = ConversationBufferMemory(
-                memory_key="chat_history",
-                return_messages=True
+                return_messages=True,
+                memory_key="chat_history"
             )
             
-            # Create agent
+            # Create agent - explicitly log the tools being passed
+            logger.info(f"Creating agent with tools: {[t.name for t in self.tools]}")
             agent = create_openai_tools_agent(
                 llm=self.llm,
                 tools=self.tools,
@@ -121,29 +119,6 @@ class ChatAgent:
             logger.error(f"Failed to initialize chat agent: {e}")
             raise
     
-    def _get_tools(self) -> List[BaseTool]:
-        """Get the tools for the agent."""
-        tools = []
-        
-        # Add M-Pesa tools
-        try:
-            till_tool = get_mpesa_tool("till")
-            paybill_tool = get_mpesa_tool("paybill")
-            tools.extend([till_tool, paybill_tool])
-            logger.info("M-Pesa tools added successfully.")
-        except Exception as e:
-            logger.warning(f"Failed to add M-Pesa tools: {e}")
-        
-        # Add Search tool
-        try:
-            search_tool = get_search_tool()
-            tools.append(search_tool)
-            logger.info("Search tool added successfully.")
-        except Exception as e:
-            logger.warning(f"Failed to add Search tool: {e}")
-        
-        return tools
-    
     def process_message(self, message: str) -> str:
         """
         Process a message from the user.
@@ -156,6 +131,8 @@ class ChatAgent:
         """
         try:
             logger.info(f"Processing message: {message}")
+            # Log the tools available to the agent
+            logger.info(f"Available tools for agent: {[t.name for t in self.tools]}")
             response = self.agent_executor.invoke({"input": message})
             logger.info(f"Agent response: {response['output']}")
             return response["output"]
@@ -163,33 +140,3 @@ class ChatAgent:
             error_msg = f"Error processing message: {str(e)}"
             logger.exception(error_msg)
             return f"I'm sorry, I encountered an error: {str(e)}"
-    
-    def add_tool(self, tool: BaseTool) -> None:
-        """
-        Add a new tool to the agent.
-        
-        Args:
-            tool: The tool to add
-        """
-        try:
-            self.tools.append(tool)
-            
-            # Reinitialize the agent with the updated tools
-            agent = create_openai_tools_agent(
-                llm=self.llm,
-                tools=self.tools,
-                prompt=self.agent_executor.agent.prompt
-            )
-            
-            self.agent_executor = AgentExecutor(
-                agent=agent,
-                tools=self.tools,
-                memory=self.memory,
-                verbose=True,
-                handle_parsing_errors=True
-            )
-            
-            logger.info(f"Added new tool: {tool.name}")
-        except Exception as e:
-            logger.error(f"Failed to add tool: {e}")
-            raise
