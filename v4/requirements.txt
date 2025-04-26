@@ -11,3 +11,4 @@ python-telegram-bot
 twilio
 pydantic
 requests
+supabase

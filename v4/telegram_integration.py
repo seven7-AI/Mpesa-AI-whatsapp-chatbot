@@ -7,6 +7,7 @@ using the python-telegram-bot library.
 
 import os
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from telegram import Update
@@ -37,114 +38,102 @@ class TelegramIntegration:
             chat_agent: The chat agent to use for processing messages
         """
         self.chat_agent = chat_agent
-        self._initialize_telegram()
+        self.token = os.getenv("TELEGRAM_BOT_TOKEN")
+        
+        if not self.token:
+            error_msg = "Missing TELEGRAM_BOT_TOKEN environment variable"
+            logger.error(error_msg)
+            raise EnvironmentError(error_msg)
+        
+        # Initialize the Telegram application
+        self.application = Application.builder().token(self.token).build()
+        
+        # Add handlers
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("clear", self.clear_command))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        
+        logger.info("Telegram integration initialized")
     
-    def _initialize_telegram(self) -> None:
-        """Initialize the Telegram bot."""
-        try:
-            # Check for required Telegram token
-            self.token = os.getenv("TELEGRAM_BOT_TOKEN")
-            
-            if not self.token:
-                error_msg = "Missing TELEGRAM_BOT_TOKEN environment variable"
-                logger.error(error_msg)
-                raise EnvironmentError(error_msg)
-            
-            # Create the application
-            self.application = Application.builder().token(self.token).build()
-            
-            # Add handlers
-            self.application.add_handler(CommandHandler("start", self._start_command))
-            self.application.add_handler(CommandHandler("help", self._help_command))
-            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
-            
-            logger.info("Telegram bot initialized successfully.")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Telegram bot: {e}")
-            raise
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /start command."""
+        user = update.effective_user
+        user_id = self._get_user_id(update)
+        logger.info(f"Start command from user {user_id}")
+        
+        await update.message.reply_text(
+            f"Hello {user.first_name}! I'm Seven, your M-Pesa payment assistant. "
+            "I can help you make Till payments. Just let me know how I can assist you."
+        )
     
-    async def _start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /help command."""
+        user_id = self._get_user_id(update)
+        logger.info(f"Help command from user {user_id}")
+        
+        await update.message.reply_text(
+            "Here's how I can help you:\n\n"
+            "1. Make Till payments through M-Pesa\n"
+            "2. Answer questions about M-Pesa services\n\n"
+            "To make a payment, simply tell me you want to pay, and I'll guide you through the process.\n\n"
+            "Commands:\n"
+            "/start - Start the conversation\n"
+            "/help - Show this help message\n"
+            "/clear - Clear your conversation history"
+        )
+    
+    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle the /clear command to reset conversation history."""
+        user_id = self._get_user_id(update)
+        logger.info(f"Clear command from user {user_id}")
+        
+        self.chat_agent.clear_user_memory(user_id)
+        await update.message.reply_text("Your conversation history has been cleared.")
+    
+    def _get_user_id(self, update: Update) -> str:
         """
-        Handle the /start command.
+        Get a unique identifier for the user.
         
         Args:
-            update: The update from Telegram
-            context: The context from Telegram
+            update: The Telegram update
+            
+        Returns:
+            str: Unique user identifier (username or ID)
         """
-        try:
-            user = update.effective_user
-            welcome_message = (
-                f"Hello {user.first_name}! 👋\n\n"
-                "I'm your M-Pesa payment assistant. I can help you with:\n"
-                "- Processing M-Pesa payments (Till and Paybill)\n"
-                "- Answering questions using web search\n\n"
-                "Just send me a message to get started!"
-            )
-            
-            await update.message.reply_text(welcome_message)
-            logger.info(f"Sent welcome message to user {user.id}")
-            
-        except Exception as e:
-            logger.error(f"Error handling start command: {e}")
-            await update.message.reply_text("Sorry, something went wrong. Please try again later.")
+        user = update.effective_user
+        # Prefer username if available, otherwise use user ID
+        return f"telegram_{user.username}" if user.username else f"telegram_{user.id}"
     
-    async def _help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """
-        Handle the /help command.
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle user messages."""
+        user_id = self._get_user_id(update)
+        message = update.message.text
+        logger.info(f"Message from user {user_id}: {message}")
         
-        Args:
-            update: The update from Telegram
-            context: The context from Telegram
-        """
-        try:
-            help_message = (
-                "Here's how you can use me:\n\n"
-                "1. For M-Pesa payments, just tell me you want to make a payment\n"
-                "2. For web searches, ask me any question\n\n"
-                "Commands:\n"
-                "/start - Start the bot\n"
-                "/help - Show this help message"
-            )
-            
-            await update.message.reply_text(help_message)
-            logger.info(f"Sent help message to user {update.effective_user.id}")
-            
-        except Exception as e:
-            logger.error(f"Error handling help command: {e}")
-            await update.message.reply_text("Sorry, something went wrong. Please try again later.")
-    
-    async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """
-        Handle incoming messages.
+        # Show typing indicator
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id,
+            action="typing"
+        )
         
-        Args:
-            update: The update from Telegram
-            context: The context from Telegram
-        """
-        try:
-            user_id = update.effective_user.id
-            message_text = update.message.text
-            
-            logger.info(f"Received message from user {user_id}: {message_text}")
-            
-            # Process the message with the chat agent
-            response = self.chat_agent.process_message(message_text)
-            
-            # Send the response back to the user
-            await update.message.reply_text(response)
-            logger.info(f"Sent response to user {user_id}")
-            
-        except Exception as e:
-            logger.error(f"Error handling message: {e}")
-            await update.message.reply_text("Sorry, I encountered an error processing your message. Please try again.")
+        # Process the message
+        response = self.chat_agent.process_message(message, user_id)
+        
+        # Reply to the user
+        await update.message.reply_text(response)
+        logger.info(f"Replied to user {user_id}")
     
-    def start_polling(self) -> None:
-        """Start the Telegram bot polling."""
-        try:
-            logger.info("Starting Telegram bot polling...")
-            self.application.run_polling()
-            
-        except Exception as e:
-            logger.error(f"Error starting Telegram bot polling: {e}")
-            raise
+    def run_polling(self):
+        """Run the polling using the Application.run_polling method."""
+        logger.info("Starting Telegram polling...")
+        # This is a blocking call that will run forever
+        # It will use the event loop that should be created in the thread
+        current_loop = asyncio.get_event_loop()
+        logger.info(f"Using event loop: {current_loop}")
+        
+        # Proper way to run the application
+        self.application.run_polling(
+            drop_pending_updates=True,
+            close_loop=False  # Don't close the loop when finished
+        )
