@@ -111,7 +111,7 @@ class ChatAgent:
         3. Use the get_bundle_by_price tool when users are interested in a specific data bundle price
         
         When helping users with minutes and airtime:
-        1. Use the search_minutes_offers tool to find relevant minutes/airtime options when users ask about available calling plans
+        1. Use the search_minutes_offers tool to find relevant minutes/airtime options when users ask about available calling plans, most users will refer to this as an offer. 
         2. Use the search_minutes_by_price_range tool when users want to see minutes options within a price range
         3. Use the get_minutes_by_price tool when users are interested in a specific minutes package price
         
