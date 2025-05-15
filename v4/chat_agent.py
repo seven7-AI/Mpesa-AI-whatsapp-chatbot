@@ -23,7 +23,7 @@ from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
 # Import our tools
-from mpesa_tool import get_mpesa_tool
+from mpesa_tool import get_mpesa_tool, get_transaction_status_tool
 from airtable_tool import get_airtable_tools
 from memory_handler import DynamicMemoryHandler
 
@@ -55,6 +55,9 @@ class ChatAgent:
         # Initialize user sessions for tracking phone numbers and payment states
         self.user_sessions = {}
         
+        # Initialize the new transaction status tool
+        self.transaction_status_tool = get_transaction_status_tool()
+        
         logger.info("Chat agent initialized with tools and memory handler")
     
     def _get_tools(self) -> List[BaseTool]:
@@ -77,6 +80,9 @@ class ChatAgent:
         except Exception as e:
             logger.error(f"Failed to initialize Airtable tools: {str(e)}")
         
+        # Add the new transaction status tool
+        tools.append(self.transaction_status_tool)
+        
         return tools
     
     def _get_agent_executor(self, user_id: str) -> AgentExecutor:
@@ -96,7 +102,7 @@ class ChatAgent:
         # Define the system message with instructions
         system_message = """You are a helpful assistant that can provide information about mobile data bundles and minutes/airtime offers. 
         
-        You can search for options from our database and help users purchase them via M-Pesa.
+        You can search for options from our Airtable database and help users purchase them via M-Pesa.
         
         CRITICAL PAYMENT INSTRUCTIONS - READ CAREFULLY:
         1. NEVER initiate a payment without EXPLICIT confirmation from the user
@@ -105,19 +111,36 @@ class ChatAgent:
         4. Always get EXPLICIT confirmation by asking "Would you like to proceed with the payment of X KSh for Y bundle?"
         5. Wait for user to type "yes", "confirm", or "proceed" BEFORE initiating any payment
         
-        When helping users with data bundles:
+        DATA BUNDLES SEARCH CAPABILITIES:
         1. Use the search_data_bundles tool to find relevant options when users ask about available data plans
         2. Use the search_bundles_by_price_range tool when users want to see data options within a price range
         3. Use the get_bundle_by_price tool when users are interested in a specific data bundle price
         
-        When helping users with minutes and airtime:
-        1. Use the search_minutes_offers tool to find relevant minutes/airtime options when users ask about available calling plans, most users will refer to this as an offer. 
+        MINUTES AND AIRTIME SEARCH CAPABILITIES:
+        1. Use the search_minutes_offers tool to find relevant minutes/airtime options when users ask about available calling plans, most users will refer to this as an offer
         2. Use the search_minutes_by_price_range tool when users want to see minutes options within a price range
         3. Use the get_minutes_by_price tool when users are interested in a specific minutes package price
         
-        PAYMENT PROCESS (ONLY after user has confirmed):
+        COMPLETE PAYMENT PROCESS:
         1. Get the user's phone number (ask if you don't have it already)
         2. ONLY THEN use the mpesa_till_payment tool with the correct amount and phone number
+        3. AFTER initiating payment, ALWAYS check the transaction status using the mpesa_transaction_status tool
+        4. If transaction status shows FAILURE, inform the user and suggest they try again
+        5. If transaction status shows SUCCESS, confirm to the user that payment has been received and their purchase is complete
+        
+        TRANSACTION STATUS CHECKING:
+        1. After initiating a payment, extract the transaction_id or originator_conversation_id from the payment response
+        2. Use mpesa_transaction_status tool to check the status using this ID
+        3. Parse the status response to determine if the transaction was successful or failed
+        4. If status is "Completed" or shows success, inform the user their payment was successful and their purchase is complete
+        5. If status shows any error or failure, politely ask the user if they would like to try the payment again
+        
+        PRODUCT INFORMATION FORMATTING:
+        When displaying products to users, include:
+        - Product name/description
+        - Price in KSh
+        - Validity period
+        - Any special features
         
         Be conversational and helpful. If a user asks about buying something, ONLY show options first. Never jump directly to payment.
         """

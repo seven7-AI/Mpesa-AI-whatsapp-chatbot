@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+import json
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -293,6 +295,120 @@ class MpesaTillTool(BaseTool):
                 "traceback": traceback.format_exc()
             }
 
+class MpesaTransactionStatusTool(BaseTool):
+    """Tool to check the status of an M-Pesa transaction."""
+    
+    name = "mpesa_transaction_status"
+    description = """Useful for checking the status of an M-Pesa transaction.
+    This tool requires a transaction ID (from the initial payment response) to check its status.
+    Input should be a JSON string with: {"transaction_id": "NEF61H8J60"} OR {"originator_conversation_id": "AG_20190826_0000777ab7d848b9e721"}
+    One of transaction_id or originator_conversation_id must be provided.
+    """
+    
+    def __init__(self):
+        """Initialize the M-Pesa Transaction Status Tool."""
+        super().__init__()
+        self._init_mpesa_client()
+    
+    def _init_mpesa_client(self):
+        """Initialize the M-Pesa client."""
+        try:
+            # Check for required environment variables
+            required_vars = [
+                "MPESA_CONSUMER_KEY",
+                "MPESA_CONSUMER_SECRET",
+                "MPESA_SHORTCODE",
+                "MPESA_PASSKEY"
+            ]
+            
+            for var in required_vars:
+                if not os.getenv(var):
+                    raise EnvironmentError(f"Missing required environment variable: {var}")
+            
+            # Initialize M-Pesa configuration
+            config = MpesaConfig(
+                consumer_key=os.getenv("MPESA_CONSUMER_KEY"),
+                consumer_secret=os.getenv("MPESA_CONSUMER_SECRET"),
+                shortcode=os.getenv("MPESA_SHORTCODE"),
+                passkey=os.getenv("MPESA_PASSKEY"),
+                environment=os.getenv("MPESA_ENVIRONMENT", "sandbox")
+            )
+            
+            # Initialize client
+            self.client = MpesaClient(config)
+            
+            # Set URLs for transaction status
+            self.result_url = os.getenv("MPESA_STATUS_RESULT_URL", 
+                                        os.getenv("MPESA_CALLBACK_URL", "https://example.com/status/result"))
+            self.timeout_url = os.getenv("MPESA_STATUS_TIMEOUT_URL", 
+                                         os.getenv("MPESA_CALLBACK_URL", "https://example.com/status/timeout"))
+            
+            logger.info("M-Pesa Transaction Status tool initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize M-Pesa Transaction Status tool: {e}")
+            raise
+    
+    def _run(self, query: str) -> str:
+        """
+        Check the status of an M-Pesa transaction.
+        
+        Args:
+            query: JSON string containing transaction_id or originator_conversation_id
+            
+        Returns:
+            str: Transaction status information
+        """
+        try:
+            # Parse the input JSON
+            params = json.loads(query)
+            
+            transaction_id = params.get("transaction_id")
+            originator_conversation_id = params.get("originator_conversation_id")
+            
+            if not transaction_id and not originator_conversation_id:
+                return "Error: Either transaction_id or originator_conversation_id must be provided."
+            
+            # Prepare transaction status request
+            # The initiator name and security credential would typically come from your M-Pesa API account
+            # For sandbox testing, you can use the test credentials
+            initiator = os.getenv("MPESA_INITIATOR", "testapi")
+            security_credential = os.getenv("MPESA_SECURITY_CREDENTIAL", "Safaricom999!*!")
+            
+            status_request = {
+                "Initiator": initiator,
+                "SecurityCredential": security_credential,
+                "CommandID": "TransactionStatusQuery",
+                "PartyA": os.getenv("MPESA_SHORTCODE"),
+                "IdentifierType": "4",  # For organization shortcode
+                "ResultURL": self.result_url,
+                "QueueTimeOutURL": self.timeout_url,
+                "Remarks": "Check transaction status",
+                "Occasion": "Status check"
+            }
+            
+            # Add either TransactionID or OriginatorConversationID
+            if transaction_id:
+                status_request["TransactionID"] = transaction_id
+            else:
+                status_request["OriginatorConversationID"] = originator_conversation_id
+            
+            # Call the M-Pesa API
+            # Note: We need to implement this method in the MpesaClient class
+            response = self.client.check_transaction_status(status_request)
+            
+            # Process the response
+            if response.get("ResponseCode") == "0":
+                return f"Transaction status check initiated successfully. Response: {json.dumps(response)}"
+            else:
+                return f"Failed to check transaction status. Response: {json.dumps(response)}"
+                
+        except json.JSONDecodeError:
+            return "Error: Invalid JSON input. Please provide a valid JSON string."
+        except Exception as e:
+            logger.error(f"Error checking transaction status: {e}")
+            return f"Error checking transaction status: {str(e)}"
+
 # Factory function to get the M-Pesa Till tool
 def get_mpesa_tool(payment_type: str = "till") -> BaseTool:
     """
@@ -309,3 +425,56 @@ def get_mpesa_tool(payment_type: str = "till") -> BaseTool:
     
     logger.info("Creating M-Pesa Till tool directly...")
     return MpesaTillTool()
+
+# Function to get the transaction status tool
+def get_transaction_status_tool() -> MpesaTransactionStatusTool:
+    """Get an instance of the M-Pesa Transaction Status tool."""
+    return MpesaTransactionStatusTool()
+
+def check_transaction_status(self, status_request: dict) -> dict:
+    """
+    Check the status of an M-Pesa transaction.
+    
+    Args:
+        status_request: Dictionary with transaction status query parameters
+        
+    Returns:
+        dict: Response from M-Pesa API
+    """
+    try:
+        # Get the access token
+        access_token = self._get_access_token()
+        
+        # Set up the API URL based on environment
+        if self.config.environment == "production":
+            url = "https://api.safaricom.co.ke/mpesa/transactionstatus/v1/query"
+        else:
+            url = "https://sandbox.safaricom.co.ke/mpesa/transactionstatus/v1/query"
+        
+        # Set up headers
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Make the API request
+        response = requests.post(url, json=status_request, headers=headers)
+        
+        # Parse and return the response
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Error checking transaction status: {response.text}")
+            return {
+                "ResponseCode": "1",
+                "ResponseDescription": f"Error: {response.text}",
+                "ErrorMessage": response.text
+            }
+            
+    except Exception as e:
+        logger.error(f"Exception checking transaction status: {e}")
+        return {
+            "ResponseCode": "1",
+            "ResponseDescription": f"Exception: {str(e)}",
+            "ErrorMessage": str(e)
+        }
