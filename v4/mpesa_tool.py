@@ -298,12 +298,11 @@ class MpesaTillTool(BaseTool):
 class MpesaTransactionStatusTool(BaseTool):
     """Tool to check the status of an M-Pesa transaction."""
     
-    name = "mpesa_transaction_status"
-    description = """Useful for checking the status of an M-Pesa transaction.
-    This tool requires a transaction ID (from the initial payment response) to check its status.
-    Input should be a JSON string with: {"transaction_id": "NEF61H8J60"} OR {"originator_conversation_id": "AG_20190826_0000777ab7d848b9e721"}
-    One of transaction_id or originator_conversation_id must be provided.
-    """
+    name: str = "mpesa_transaction_status"
+    description: str = "This tool checks the status of M-Pesa transactions."
+    result_url: str = Field(default=os.getenv("MPESA_STATUS_RESULT_URL", "http://default.result.url"), description="URL to receive transaction status results")
+    timeout_url: str = Field(default=os.getenv("MPESA_STATUS_TIMEOUT_URL", "http://default.timeout.url"), description="URL to receive timeout notifications")
+    client: Optional[MpesaClient] = Field(None, description="Client for M-Pesa API interactions")
     
     def __init__(self):
         """Initialize the M-Pesa Transaction Status Tool."""
@@ -331,17 +330,12 @@ class MpesaTransactionStatusTool(BaseTool):
                 consumer_secret=os.getenv("MPESA_CONSUMER_SECRET"),
                 shortcode=os.getenv("MPESA_SHORTCODE"),
                 passkey=os.getenv("MPESA_PASSKEY"),
-                environment=os.getenv("MPESA_ENVIRONMENT", "sandbox")
+                environment=os.getenv("MPESA_ENVIRONMENT", "sandbox"),
+                callback_url=os.getenv("MPESA_CALLBACK_URL")
             )
             
             # Initialize client
             self.client = MpesaClient(config)
-            
-            # Set URLs for transaction status
-            self.result_url = os.getenv("MPESA_STATUS_RESULT_URL", 
-                                        os.getenv("MPESA_CALLBACK_URL", "https://example.com/status/result"))
-            self.timeout_url = os.getenv("MPESA_STATUS_TIMEOUT_URL", 
-                                         os.getenv("MPESA_CALLBACK_URL", "https://example.com/status/timeout"))
             
             logger.info("M-Pesa Transaction Status tool initialized successfully")
             

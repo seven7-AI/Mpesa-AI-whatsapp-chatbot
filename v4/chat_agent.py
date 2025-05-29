@@ -23,7 +23,7 @@ from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
 # Import our tools
-from mpesa_tool import get_mpesa_tool, get_transaction_status_tool
+from mpesa_tool import get_mpesa_tool, get_transaction_status_tool, MpesaTransactionStatusTool
 from airtable_tool import get_airtable_tools
 from memory_handler import DynamicMemoryHandler
 
@@ -46,6 +46,14 @@ class ChatAgent:
         # Initialize memory handler
         self.memory_handler = DynamicMemoryHandler()
         
+        # Initialize other tools
+        self.till_tool = get_mpesa_tool("till")
+        self.paybill_tool = get_mpesa_tool("paybill")
+        # self.search_tool = get_search_tool()
+        
+        # Initialize the transaction status tool
+        self.transaction_status_tool = MpesaTransactionStatusTool()
+        
         # Initialize tools
         self.tools = self._get_tools()
         
@@ -54,9 +62,6 @@ class ChatAgent:
         
         # Initialize user sessions for tracking phone numbers and payment states
         self.user_sessions = {}
-        
-        # Initialize the new transaction status tool
-        self.transaction_status_tool = get_transaction_status_tool()
         
         logger.info("Chat agent initialized with tools and memory handler")
     
